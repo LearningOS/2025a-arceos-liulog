@@ -67,6 +67,18 @@ impl DirNode {
         children.remove(name);
         Ok(())
     }
+
+    /// Rename a node from `src_name` to `dst_name` in this directory.
+    pub fn rename(&self, src_name: &str, dst_name: &str) -> VfsResult {
+        let mut children = self.children.write();
+        let node = children.get(src_name).ok_or(VfsError::NotFound)?;
+
+        // Previous check has been promised that dst_name does not exist.
+        let node = node.clone();
+        children.remove(src_name);
+        children.insert(dst_name.into(), node);
+        Ok(())
+    }
 }
 
 impl VfsNodeOps for DirNode {
@@ -163,6 +175,17 @@ impl VfsNodeOps for DirNode {
         } else {
             self.remove_node(name)
         }
+    }
+
+    fn rename(&self, src_path: &str, dst_path: &str) -> VfsResult {
+        log::debug!("rename at ramfs: {} -> {}", src_path, dst_path);
+
+        // Note: Currently only support renaming within the same directory.
+        let src_name = src_path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("");
+        let dst_name = dst_path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("");
+        
+        // Rename the node in the current directory.
+        self.rename(src_name, dst_name)
     }
 
     axfs_vfs::impl_vfs_dir_default! {}
