@@ -1,13 +1,17 @@
 #![allow(dead_code)]
 
-use core::ffi::{c_void, c_char, c_int};
-use axhal::arch::TrapFrame;
-use axhal::trap::{register_trap_handler, SYSCALL};
+use arceos_posix_api as api;
 use axerrno::LinuxError;
+use axhal::arch::TrapFrame;
+use axhal::mem::phys_to_virt;
+use axhal::paging::MappingFlags;
+use axhal::trap::{register_trap_handler, SYSCALL};
 use axtask::current;
 use axtask::TaskExtRef;
-use axhal::paging::MappingFlags;
-use arceos_posix_api as api;
+use core::ffi::{c_char, c_int, c_void};
+use memory_addr::{MemoryAddr, VirtAddr, VirtAddrRange};
+
+use crate::USER_STACK_SIZE;
 
 const SYS_IOCTL: usize = 29;
 const SYS_OPENAT: usize = 56;
@@ -100,9 +104,14 @@ bitflags::bitflags! {
 fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
     ax_println!("handle_syscall [{}] ...", syscall_num);
     let ret = match syscall_num {
-         SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
+        SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
         SYS_SET_TID_ADDRESS => sys_set_tid_address(tf.arg0() as _),
-        SYS_OPENAT => sys_openat(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _, tf.arg3() as _),
+        SYS_OPENAT => sys_openat(
+            tf.arg0() as _,
+            tf.arg1() as _,
+            tf.arg2() as _,
+            tf.arg3() as _,
+        ),
         SYS_CLOSE => sys_close(tf.arg0() as _),
         SYS_READ => sys_read(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _),
         SYS_WRITE => sys_write(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _),
@@ -110,11 +119,11 @@ fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
         SYS_EXIT_GROUP => {
             ax_println!("[SYS_EXIT_GROUP]: system is exiting ..");
             axtask::exit(tf.arg0() as _)
-        },
+        }
         SYS_EXIT => {
             ax_println!("[SYS_EXIT]: system is exiting ..");
             axtask::exit(tf.arg0() as _)
-        },
+        }
         SYS_MMAP => sys_mmap(
             tf.arg0() as _,
             tf.arg1() as _,
@@ -140,7 +149,38 @@ fn sys_mmap(
     fd: i32,
     _offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+    // 1. Get user address space
+    let curr = current();
+    let mut uspace = curr.task_ext().aspace.lock();
+
+    // 2. Find free area in user address space
+    // User space layout:
+    //    Text
+    //    Data
+    //    ...       --> Find free area here
+    //    Stack
+    // Here just use a fixed range for mmap for simplicity 0x10_0000_0000 ~ 0x30_0000_0000, to avoid
+    // conflict with other mappings.
+    let mmap_range =
+        VirtAddrRange::from_start_size(VirtAddr::from_usize(0x10_0000_0000), 0x20_0000_0000);
+    let mmap_vaddr = uspace
+        .find_free_area(VirtAddr::from_usize(addr as usize), length, mmap_range)
+        .unwrap();
+    let mapping_flags: MappingFlags = MmapProt::from_bits_truncate(prot).into();
+    let mmap_flags = MmapFlags::from_bits_truncate(flags);
+
+    // 3. Read from file
+    // TODO: add more checks
+    uspace.map_alloc(mmap_vaddr, length.align_up_4k(), mapping_flags, true).unwrap();
+
+    // convert to kernel virtual address
+    let (paddr, _, _) = uspace
+        .page_table()
+        .query(mmap_vaddr.into())
+        .unwrap();
+    api::sys_read(fd, phys_to_virt(paddr).as_mut_ptr_of(), length);
+    
+    mmap_vaddr.as_usize() as isize
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {
