@@ -1,6 +1,8 @@
 
-#[cfg(feature = "alloc")]
-pub use hashbrown::HashMap;
+// Note: alloc::collections doesn't provide HashMap.
 
-#[cfg(feature = "alloc")]
+pub mod hash;
+
+pub use hash::map::MyHashMap as HashMap;
+
 pub use alloc::collections::*;

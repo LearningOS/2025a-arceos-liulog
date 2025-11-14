@@ -80,4 +80,6 @@ arceos_api = { workspace = true }
 axio = "0.1"
 axerrno = "0.1"
 kspin = "0.1"
+axhal = { workspace = true}
 hashbrown = "0.16.0"
+foldhash = { version = "0.2.0", default-features = false }
